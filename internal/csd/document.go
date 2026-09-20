@@ -17,6 +17,9 @@ const HashVersion = "csd-semantic/v1"
 var idPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._:-]{0,127}$`)
 var typePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
+// ValidID reports whether id conforms to the CSD stable identity grammar.
+func ValidID(id string) bool { return idPattern.MatchString(id) }
+
 type Node struct {
 	ID     string           `json:"id"`
 	Type   string           `json:"type"`
@@ -249,4 +252,20 @@ func (d *Document) Link(e Edge) (*Document, error) {
 	}
 	s.Edges = append(s.Edges, e)
 	return FromSnapshot(s)
+}
+
+// Unlink removes one exact semantic edge and returns a new snapshot.
+func (d *Document) Unlink(e Edge) (*Document, error) {
+	s, err := d.next()
+	if err != nil {
+		return nil, err
+	}
+	for i, current := range s.Edges {
+		if current != e {
+			continue
+		}
+		s.Edges = append(s.Edges[:i], s.Edges[i+1:]...)
+		return FromSnapshot(s)
+	}
+	return nil, problem("NOT_FOUND", "$/edges", e.From+" -> "+e.To)
 }

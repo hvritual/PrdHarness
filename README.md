@@ -4,15 +4,24 @@
 
 ## 当前交付
 
-本轮仅实现 [CSD-01 / #2](https://github.com/hvritual/PrdHarness/issues/2) 的语义文档内核与 CLI。完整路线见 [总 Issue #1](https://github.com/hvritual/PrdHarness/issues/1)：19 个实施任务，分 MVP、Full Runtime、Production。Issues 是路线状态入口，本文件不是第二份路线。
+完整路线见 [总 Issue #1](https://github.com/hvritual/PrdHarness/issues/1)。CSD-01 提供不可变语义文档内核；本分支实现 [CSD-02 / #3](https://github.com/hvritual/PrdHarness/issues/3) 的受控语义命令、文件存储与 CAS。CSD-02 依赖 CSD-01，因此在 #2 未合并期间使用 stacked branch/PR，不直接把依赖绕进 `main`。
 
-已实现：create document、add node、update node、link node、validate、serialize、load、semantic hash、semantic diff。
+CSD-02 增加：
 
-**尚未实现**：PRD 领域完备性 Gate、持久化 CAS、用户权限、Human 审批、签名 Evidence、LLM、Web UI、业务 E2E。`validate` 只表示 CSD 结构有效，不表示 PRD 已准备好开发或已通过审核。
+- `Semantic Command -> Validate -> CAS -> Atomic Commit` 唯一 canonical file-store 写链。
+- command ID 幂等、防止同 ID 不同载荷重放。
+- expected revision 乐观并发控制；跨进程目录锁串行化每个 Document ID 的提交窗口。
+- current CSD + operation receipt 单 envelope 原子提交，避免两份状态半提交。
+- create document / add node / update node / link / unlink / deprecate node 批次操作；批次失败零持久化。
+- 同目录临时文件、flush、原子 replace；Unix 目录 fsync，Windows 使用 `MoveFileExW(REPLACE_EXISTING|WRITE_THROUGH)`。
+- Document ID 只用于摘要寻址，不拼接文件路径；store/root/state symlink 明确拒绝。
+- 本地 provenance 记录 actor class/subject，但 assurance 固定为 `caller_asserted_local`，不是认证或审批。
 
-## 运行
+**仍未实现**：PRD 领域 Schema/Ready Gate、Human 审批、签名 evidence、OAuth/RBAC、多租户、数据库、LLM、Web UI、业务 E2E。结构有效、command 成功或 receipt 存在均不代表产品需求已批准。
 
-模块最低语言版本 Go 1.23，无第三方依赖。本轮实际测试环境和限制见验证报告；最低编译版本不是当前生产工具链推荐。
+## Canonical store
+
+构建：
 
 ```sh
 go test ./...
@@ -21,33 +30,59 @@ go vet ./...
 go build -o prd ./cmd/prd
 ```
 
-Linux/macOS 使用 `./prd`，Windows 编译为 `prd.exe` 后使用 `./prd.exe`。下列命令每次创建新快照，`--out` 永不覆盖现有文件；重复演示请使用新目录/文件名。
+创建命令并提交：
+
+```sh
+./prd apply \
+  --store ./var/prd \
+  --command examples/commands/create.json
+```
+
+读取当前 canonical CSD：
+
+```sh
+./prd get --store ./var/prd --id PRD-001
+```
+
+更新使用新的 command ID，并绑定当前 revision：
+
+```sh
+./prd apply \
+  --store ./var/prd \
+  --command examples/commands/update.json
+```
+
+`apply` 默认最多等待文档锁 5 秒，可用 `--lock-timeout` 调整。残留锁不会被自动抢占；需要先确认没有活跃 writer，再按运行手册处理。失败发生在原子 rename 之后、目录 durability sync 之前时，调用方不能自行判断“未提交”；应使用**相同 command ID 和相同载荷重试**，系统会根据已提交 receipt 返回 replay。
+
+Store layout 使用 Document ID 的 SHA-256 文件名：
+
+```text
+<store>/
+├── documents/<sha256(document-id)>.json
+└── locks/<sha256(document-id)>.lock/
+```
+
+`documents/*.json` 是内部原子 state envelope，包含 current CSD 和最小 command receipts。不要直接编辑；当前版本没有签名/可信执行环境，拥有同一文件系统写权限的主体仍可篡改本地文件。
+
+## Detached CSD utilities
+
+CSD-01 的命令仍可用于创建和比较**脱离 canonical store 的快照**：
 
 ```sh
 ./prd create --id PRD-001 --type prd --title "套餐升级" --out v1.json
 ./prd add-node --file v1.json --node examples/requirement.json --out v2.json
-./prd add-node --file v2.json --node examples/goal.json --out v3.json
-./prd link-node --file v3.json --from REQ-001 --type serves --to GOAL-001 --out v4.json
-./prd update-node --file v4.json --id REQ-001 --patch examples/update.json --out v5.json
-./prd validate --file v5.json
-./prd serialize --file v5.json
-./prd load --file v5.json
-./prd semantic-hash --file v5.json
-./prd semantic-diff --before v4.json --after v5.json
+./prd semantic-hash --file v2.json
 ```
 
-无 `--out` 时输出 JSON 到 stdout。**不要使用 `> input.json` 覆盖输入文件**，shell 会在进程读取前截断文件。
+这些命令不能修改 canonical store，也不能绕过 CAS。`--out` 永不覆盖现有文件。
 
-退出码：`0` 操作成功（非空 diff 也为成功），`1` 输入/操作失败，`2` 命令用法错误。错误以带 `code/path/message` 的 JSON 输出 stderr。
+## 关键边界
 
-## 边界
+- `internal/csd`：纯不可变语义内核；本轮仅补充 exact edge unlink 和稳定 ID 校验接口。
+- `internal/operations`：命令协议、批次语义、幂等、CAS 判断、receipt。
+- `internal/filestore`：跨进程锁、严格 store 读取、原子 envelope 替换；不决定产品业务语义。
+- `cmd/prd apply`：canonical file-store 写入口；`get` 只读。
+- [CSD-02 设计](docs/architecture/csd-controlled-store.md)：事务、锁、幂等与失败语义。
+- [CSD-02 验证记录](docs/verification/csd-controlled-store.md)：实际执行结果和未验证范围。
 
-- `internal/csd`：不可变快照、类型与引用校验、严格 JSON、确定性序列化与摘要、字段级 diff。
-- `cmd/prd`：文件读取和命令适配。它不是共享文档存储，也不负责审批或身份认证。
-- `examples`：虚构演示输入，不是已批准业务规则。
-- [CSD 协议](docs/architecture/csd-core.md)：hash 字段、数字类型、规范化和安全边界。
-- [验证记录](docs/verification/csd-core.md)：实际执行的测试与证据限制。
-
-一个 CSD 是一份文档快照。`v1.json`、`v2.json` 等是历史/候选版本，不是可独立维护的 Human PRD / AI PRD；持久化 current-head 与 CAS 在 #3 实现。
-
-Semantic hash 只比较协议明确规定的内容，不证明自然语言含义等价，不证明来源可信，更不是签名。当前 JSON 文件仍可以被操作者修改后加载；生产单一写入权威与隔离属于后续任务。
+Semantic hash 仍只代表版本化规范字段摘要，不证明自然语言同义、来源可信或审批成立。Receipt 也不是签名 attestation。
