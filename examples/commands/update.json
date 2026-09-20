@@ -1,0 +1,21 @@
+{
+  "version": "semantic-command/v1",
+  "id": "CMD-002",
+  "document_id": "PRD-001",
+  "expected_revision": 2,
+  "actor": {
+    "class": "human",
+    "subject": "local:example"
+  },
+  "operations": [
+    {
+      "kind": "update_node",
+      "node_id": "REQ-001",
+      "patch": {
+        "set_fields": {
+          "behavior": "支付成功后只开通已付费新增模块"
+        }
+      }
+    }
+  ]
+}

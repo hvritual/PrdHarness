@@ -1,0 +1,30 @@
+{
+  "version": "semantic-command/v1",
+  "id": "CMD-001",
+  "document_id": "PRD-001",
+  "expected_revision": 0,
+  "actor": {
+    "class": "human",
+    "subject": "local:example"
+  },
+  "operations": [
+    {
+      "kind": "create_document",
+      "document": {
+        "type": "prd",
+        "title": "套餐升级"
+      }
+    },
+    {
+      "kind": "add_node",
+      "node": {
+        "id": "REQ-001",
+        "type": "requirement",
+        "title": "套餐升级",
+        "fields": {
+          "behavior": "只收新增模块费用"
+        }
+      }
+    }
+  ]
+}
