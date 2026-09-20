@@ -1,0 +1,1 @@
+{"id":"REQ-001","type":"requirement","title":"套餐升级","fields":{"behavior":"仅收取新增模块费用","critical":true,"steps":["确认报价","确认付款","开通权益"]}}

@@ -1,0 +1,7 @@
+/var/
+/bin/
+/prd
+/prd.exe
+/v*.json
+*.test
+*.out
